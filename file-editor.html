@@ -321,6 +321,17 @@ select.encoding-select {
   font-size: 12px;
 }
 
+.table-actions { display: flex; gap: 4px; margin-left: 6px; }
+.table-actions .btn-sm {
+  padding: 3px 8px; font-size: 11px; border: 1px solid var(--border);
+  border-radius: 4px; background: var(--bg); color: var(--text);
+  cursor: pointer; font-family: var(--font-sans);
+}
+.table-actions .btn-sm:hover { background: var(--bg3); }
+.table-actions .btn-sm.danger:hover { background: #fee2e2; border-color: var(--danger); color: var(--danger); }
+
+.toolbar-mode { display: flex; align-items: center; gap: 8px; }
+
 .table-wrapper {
   flex: 1;
   overflow: auto;
@@ -537,9 +548,20 @@ select.encoding-select {
       <div class="panel preview-panel" id="panelPreview"></div>
 
       <div class="panel table-panel" id="panelTable">
-        <div class="table-toolbar">
-          <span>工作表:</span>
-          <select id="sheetSelect"></select>
+        <div class="table-toolbar" id="tableToolbar">
+          <div class="toolbar-mode" id="xlsxMode" style="display:none">
+            <span>工作表:</span>
+            <select id="sheetSelect"></select>
+          </div>
+          <div class="toolbar-mode" id="mdMode" style="display:none">
+            <span style="font-weight:600;font-size:12px;">📋 Markdown 表格</span>
+            <span class="table-actions">
+              <button class="btn-sm" id="btnAddRow" title="在末尾添加一行">+ 行</button>
+              <button class="btn-sm danger" id="btnDelRow" title="删除最后一行">- 行</button>
+              <button class="btn-sm" id="btnAddCol" title="在右侧添加一列">+ 列</button>
+              <button class="btn-sm danger" id="btnDelCol" title="删除最后一列">- 列</button>
+            </span>
+          </div>
           <span style="margin-left:8px;" id="tableRowCount"></span>
         </div>
         <div class="table-wrapper" id="tableWrapper"></div>
@@ -579,6 +601,11 @@ select.encoding-select {
   let redoStack = [];
   let xlsxWorkbook = null;
   let currentSheetName = '';
+  let mdTableStartLine = -1;
+  let mdTableEndLine = -1;
+  let mdTableColumns = [];
+  let mdTableData = [];
+  let isMDTableMode = false;
 
   const EXT_FORMAT_MAP = {
     txt: 'txt', md: 'md', markdown: 'md', json: 'json', csv: 'csv', tsv: 'csv',
@@ -671,6 +698,7 @@ select.encoding-select {
     updateLineNumbers();
     updateStatus();
     updatePreview();
+    updateTabVisibility();
     checkWelcome();
     markModified();
   }
@@ -951,9 +979,16 @@ select.encoding-select {
   function updateTabVisibility() {
     const previewTab = document.querySelector('.tab[data-panel="preview"]');
     const tableTab = document.querySelector('.tab[data-panel="table"]');
-    const editTab = document.querySelector('.tab[data-panel="edit"]');
 
+    let showTable = false;
     if (currentFormat === 'xlsx' || currentFormat === 'csv') {
+      showTable = true;
+    } else if (currentFormat === 'md') {
+      const hasTable = detectMDTables(textEditor.value);
+      showTable = hasTable;
+    }
+
+    if (showTable) {
       tableTab.classList.remove('hidden');
     } else {
       tableTab.classList.add('hidden');
@@ -993,6 +1028,35 @@ select.encoding-select {
     if (tab) tab.classList.add('active');
     if (panel) panel.classList.add('active');
     if (name === 'preview') updatePreview();
+    if (name === 'table') {
+      if (currentFormat === 'md') {
+        const parsed = parseMDTable(textEditor.value);
+        if (parsed) {
+          mdTableColumns = parsed.columns;
+          mdTableData = parsed.data;
+          mdTableStartLine = parsed.startLine;
+          mdTableEndLine = parsed.endLine;
+          isMDTableMode = true;
+          document.getElementById('xlsxMode').style.display = 'none';
+          document.getElementById('mdMode').style.display = 'flex';
+          buildMDTable(mdTableData, mdTableColumns);
+        }
+      } else if (currentFormat === 'xlsx') {
+        isMDTableMode = false;
+        document.getElementById('xlsxMode').style.display = 'flex';
+        document.getElementById('mdMode').style.display = 'none';
+      } else if (currentFormat === 'csv') {
+        isMDTableMode = false;
+        document.getElementById('xlsxMode').style.display = 'none';
+        document.getElementById('mdMode').style.display = 'none';
+        const parsed = loadCSV(textEditor.value);
+        buildTable(parsed.data, parsed.columns);
+      } else {
+        isMDTableMode = false;
+        document.getElementById('xlsxMode').style.display = 'flex';
+        document.getElementById('mdMode').style.display = 'none';
+      }
+    }
   }
 
   function handleFile(file) {
@@ -1111,14 +1175,13 @@ select.encoding-select {
   }
 
   function collectTableEdits() {
-    const cells = tableWrapper.querySelectorAll('td.editable');
-    const rows = tableWrapper.querySelectorAll('tbody tr');
     const columns = [];
     const headers = tableWrapper.querySelectorAll('thead th');
     headers.forEach((th, i) => { if (i > 0) columns.push(th.textContent.trim()); });
 
     const data = [];
-    rows.forEach((row, ri) => {
+    const rows = tableWrapper.querySelectorAll('tbody tr');
+    rows.forEach((row) => {
       const obj = {};
       const tds = row.querySelectorAll('td');
       tds.forEach((td, ci) => {
@@ -1129,17 +1192,110 @@ select.encoding-select {
       data.push(obj);
     });
 
-    textEditor.value = csvToText(data, columns);
+    if (isMDTableMode) {
+      const mdTable = mdTableToText(data, columns);
+      const lines = textEditor.value.split('\n');
+      const before = lines.slice(0, mdTableStartLine);
+      const after = lines.slice(mdTableEndLine + 1);
+      const newLines = before.concat(mdTable.split('\n'), after);
+      textEditor.value = newLines.join('\n');
+      mdTableEndLine = mdTableStartLine + mdTable.split('\n').length - 1;
+    } else {
+      textEditor.value = csvToText(data, columns);
+    }
     updateLineNumbers();
     updateStatus();
     updatePreview();
+  }
+
+  function detectMDTables(text) {
+    const regex = /^\|.+\|\s*\n\|[-:|\s]+\|\s*\n(?:^\|.+\|\s*\n?)+/m;
+    return regex.test(text);
+  }
+
+  function parseMDTable(text) {
+    const regex = /^\|.+\|\s*\n\|[-:|\s]+\|\s*\n(?:^\|.+\|\s*\n?)+/m;
+    const match = text.match(regex);
+    if (!match) return null;
+
+    const before = text.substring(0, match.index);
+    const startLine = before.split('\n').length;
+    const tableBlock = match[0];
+    const lines = tableBlock.split('\n').filter(l => l.trim());
+
+    const headerLine = lines[0];
+    const headers = headerLine.split('|').map(c => c.trim()).filter(c => c);
+    const endLine = startLine + lines.length - 1;
+
+    const data = [];
+    for (let i = 2; i < lines.length; i++) {
+      const cells = lines[i].split('|').map(c => c.trim()).filter(c => c !== '');
+      const cellsFull = [];
+      for (let j = 0; j < headers.length; j++) {
+        cellsFull.push(cells[j] || '');
+      }
+      const row = {};
+      headers.forEach((h, idx) => { row[h] = cellsFull[idx] || ''; });
+      data.push(row);
+    }
+
+    return { columns: headers, data, startLine, endLine };
+  }
+
+  function mdTableToText(data, columns) {
+    const widths = columns.map(c => c.length);
+    for (const row of data) {
+      columns.forEach((c, i) => {
+        const v = String(row[c] || '');
+        widths[i] = Math.max(widths[i], v.length);
+      });
+    }
+
+    const pad = (s, w) => {
+      const str = String(s || '');
+      return str + ' '.repeat(Math.max(0, w - str.length));
+    };
+
+    const headerRow = '| ' + columns.map((c, i) => pad(c, widths[i])).join(' | ') + ' |';
+    const sepRow = '|' + columns.map((_, i) => '-'.repeat(widths[i] + 2)).join('|') + '|';
+    const dataRows = data.map(row =>
+      '| ' + columns.map((c, i) => pad(row[c] || '', widths[i])).join(' | ') + ' |'
+    );
+
+    return [headerRow, sepRow, ...dataRows].join('\n');
+  }
+
+  function buildMDTable(data, columns) {
+    mdTableColumns = columns;
+    mdTableData = data;
+    let html = '<table class="data-table"><thead><tr>';
+    html += '<th>#</th>';
+    for (const col of columns) {
+      html += '<th>' + escapeHtml(String(col)) + '</th>';
+    }
+    html += '</tr></thead><tbody>';
+    for (let i = 0; i < data.length; i++) {
+      html += '<tr>';
+      html += '<td style="color:var(--text2)">' + (i + 1) + '</td>';
+      for (const col of columns) {
+        const val = data[i][col] !== undefined ? String(data[i][col]) : '';
+        html += '<td contenteditable="true" class="editable">' + escapeHtml(val) + '</td>';
+      }
+      html += '</tr>';
+    }
+    html += '</tbody></table>';
+    tableWrapper.innerHTML = html;
+    document.getElementById('tableRowCount').textContent = '共 ' + data.length + ' 行 × ' + columns.length + ' 列';
   }
 
   textEditor.addEventListener('input', function() {
     updateLineNumbers();
     updateStatus();
     markModified();
-    
+    if (currentFormat === 'md') {
+      updateTabVisibility();
+    }
+
     clearTimeout(textEditor._previewTimer);
     textEditor._previewTimer = setTimeout(function() {
       if (document.getElementById('panelPreview').classList.contains('active')) {
@@ -1300,6 +1456,43 @@ select.encoding-select {
       collectTableEdits();
       markModified();
     }
+  });
+
+  document.getElementById('btnAddRow').addEventListener('click', function() {
+    if (!isMDTableMode) return;
+    const newRow = {};
+    mdTableColumns.forEach(c => { newRow[c] = ''; });
+    mdTableData.push(newRow);
+    buildMDTable(mdTableData, mdTableColumns);
+    collectTableEdits();
+    markModified();
+  });
+
+  document.getElementById('btnDelRow').addEventListener('click', function() {
+    if (!isMDTableMode || mdTableData.length === 0) return;
+    mdTableData.pop();
+    buildMDTable(mdTableData, mdTableColumns);
+    collectTableEdits();
+    markModified();
+  });
+
+  document.getElementById('btnAddCol').addEventListener('click', function() {
+    if (!isMDTableMode) return;
+    const newCol = '列' + (mdTableColumns.length + 1);
+    mdTableColumns.push(newCol);
+    mdTableData.forEach(row => { row[newCol] = ''; });
+    buildMDTable(mdTableData, mdTableColumns);
+    collectTableEdits();
+    markModified();
+  });
+
+  document.getElementById('btnDelCol').addEventListener('click', function() {
+    if (!isMDTableMode || mdTableColumns.length <= 1) return;
+    const removed = mdTableColumns.pop();
+    mdTableData.forEach(row => { delete row[removed]; });
+    buildMDTable(mdTableData, mdTableColumns);
+    collectTableEdits();
+    markModified();
   });
 
   document.getElementById('btnTheme').addEventListener('click', function() {
