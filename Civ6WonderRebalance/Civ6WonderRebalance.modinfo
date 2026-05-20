@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Mod id="3c7a8d9e-1f2b-4a6c-9d8e-7f1a2b3c4d5e" version="1">
+    <Properties>
+        <Name>LOC_MOD_TITLE</Name>
+        <Teaser>LOC_MOD_TEASER</Teaser>
+        <Description>LOC_MOD_DESCRIPTION</Description>
+        <Authors>SOLO AI</Authors>
+        <CompatibleVersions>2.0</CompatibleVersions>
+        <ShowInBrowser>Show</ShowInBrowser>
+    </Properties>
+    <Components>
+        <UpdateDatabase id="CIV6_WONDER_REBALANCE_DATA">
+            <Properties>
+                <Name>LOC_COMPONENT_DATA_NAME</Name>
+            </Properties>
+            <Items>
+                <File>Data/Civ6WonderRebalance_Gameplay.sql</File>
+            </Items>
+        </UpdateDatabase>
+        <LocalizedText id="CIV6_WONDER_REBALANCE_TEXT">
+            <Properties>
+                <Name>LOC_COMPONENT_TEXT_NAME</Name>
+            </Properties>
+            <Items>
+                <File>Text/Civ6WonderRebalance_Text_zh_Hans.xml</File>
+            </Items>
+        </LocalizedText>
+    </Components>
+    <Files>
+        <File>Data/Civ6WonderRebalance_Gameplay.sql</File>
+        <File>Text/Civ6WonderRebalance_Text_zh_Hans.xml</File>
+    </Files>
+</Mod>
